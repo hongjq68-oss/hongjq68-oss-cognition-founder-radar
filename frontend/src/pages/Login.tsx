@@ -10,10 +10,12 @@ const roleInfo: Record<string, string> = {
 export default function Login() {
   const [users, setUsers] = useState<Any[]>([]);
   const [err, setErr] = useState("");
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
   const nav = useNavigate();
   useEffect(() => { api.demoUsers().then(setUsers); }, []);
   const go = async (email: string) => {
-    try { const r = await api.login(email); setToken(r.token); nav("/"); window.location.reload(); } catch (e) { setErr((e as Error).message); }
+    try { const r = await api.login(email, code); setToken(r.token); nav("/"); window.location.reload(); } catch (e) { setErr((e as Error).message); }
   };
   return (
     <div className="min-h-screen flex items-center justify-center bg-ink-900 p-6">
@@ -31,6 +33,13 @@ export default function Login() {
             </button>
           ))}
         </div>
+        {users.length === 0 && (
+          <form className="space-y-2" onSubmit={(e) => { e.preventDefault(); go(email); }}>
+            <input className="input" type="email" placeholder="Work email" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <input className="input" type="password" placeholder="Access code" value={code} onChange={(e) => setCode(e.target.value)} required />
+            <button className="btn-primary w-full justify-center">Sign in</button>
+          </form>
+        )}
         {err && <div className="text-sm text-rose-600 mt-3">{err}</div>}
         <p className="text-xs text-slate-400 mt-6">All people, companies and events in the demo dataset are fictional and labelled SYNTHETIC.</p>
       </div>

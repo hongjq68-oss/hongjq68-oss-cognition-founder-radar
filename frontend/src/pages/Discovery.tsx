@@ -37,7 +37,7 @@ export default function Discovery() {
   return (
     <div>
       <PageHeader title="Discovery" subtitle="Search founders, former founders, intrapreneurs and independent builders by evidence of what they built."
-        actions={can("audit") && <button className="btn-secondary" onClick={() => download(`/api/export/people.csv?${qs(params)}`, "founder-radar.csv").catch((e) => toast(e.message))}><Download className="h-4 w-4" />Export CSV</button>} />
+        actions={can("audit") && <button className="btn-secondary" onClick={() => download(`/api/export/people.csv?${qs({ ...params, scope: "filtered" })}`, "founder-radar.csv").catch((e) => toast(e.message))}><Download className="h-4 w-4" />Export CSV</button>} />
       <div className="grid lg:grid-cols-[260px_1fr] gap-6">
         <aside className="card p-4 h-fit space-y-4 text-sm lg:sticky lg:top-0">
           <div className="flex items-center justify-between"><div className="font-semibold flex items-center gap-2"><SlidersHorizontal className="h-4 w-4" />Filters</div>

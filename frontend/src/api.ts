@@ -41,7 +41,7 @@ export async function download(path: string, filename: string) {
 
 export const api = {
   demoUsers: () => req("/api/auth/demo-users"),
-  login: (email: string) => req("/api/auth/login", body("POST", { email })),
+  login: (email: string, access_code?: string) => req("/api/auth/login", body("POST", { email, access_code: access_code || undefined })),
   me: () => req("/api/me"),
   meta: () => req("/api/meta"),
   dashboard: () => req("/api/dashboard"),

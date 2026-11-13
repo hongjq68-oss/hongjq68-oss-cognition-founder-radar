@@ -22,6 +22,7 @@ Demo sign-in (email-only, replace with SSO in production): `admin@`, `priya@` / 
 | --- | --- |
 | `GITHUB_TOKEN` / `GH_TOKEN` | Higher GitHub API rate limit for the GitHub discovery connector |
 | `OPENAI_API_KEY` or `ANTHROPIC_API_KEY` | LLM-written research summaries, role matches and outreach drafts (falls back to deterministic rules) |
+| `RADAR_ACCESS_CODE` | If set, sign-in requires this shared code and the demo user list is hidden (use until SSO is added) |
 | `RADAR_SECRET` | Token signing secret (auto-generated into `backend/data/.secret` otherwise) |
 | `RADAR_DATA_DIR` | SQLite location (default `backend/data`) |
 | `DATABASE_URL` | Use Postgres etc. instead of SQLite |

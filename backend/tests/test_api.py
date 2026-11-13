@@ -102,3 +102,56 @@ def test_shortlist_is_bounded_and_explained():
 def test_watch_event_requires_url():
     r = c.post("/api/watch-events", json={"company_name": "Grab", "event_type": "Restructuring", "summary": "x", "source_url": ""}, headers=RES)
     assert r.status_code == 400
+
+
+def _ready_candidate(name):
+    pid = c.post("/api/people", json={"full_name": name, "country": "Japan", "city": "Tokyo"}, headers=REC).json()["id"]
+    eid = c.post(f"/api/people/{pid}/evidence", json={"dimension": "built_from_zero", "claim": "Built a thing", "capabilities": ["ai_ml"],
+                                                       "source_url": "https://example.com/a", "strength": "Strong"}, headers=RES).json()["id"]
+    assert c.patch(f"/api/evidence/{eid}", json={"verification": "Verified"}, headers=REC).status_code == 200
+    assert c.post(f"/api/people/{pid}/status", json={"status": "recruiter_verified"}, headers=REC).status_code == 200
+    for k in c.get("/api/meta", headers=REC).json()["checklist"]:
+        c.post(f"/api/people/{pid}/checklist", json={"key": k, "ok": True}, headers=REC)
+    assert c.post(f"/api/people/{pid}/status", json={"status": "ready_for_outreach_review"}, headers=REC).status_code == 200
+    return pid, eid
+
+
+def test_evidence_changes_reopen_gates():
+    pid, eid = _ready_candidate("Gate Tester")
+    did = c.post(f"/api/people/{pid}/outreach", json={}, headers=REC).json()["id"]
+    assert c.patch(f"/api/outreach/{did}", json={"status": "Approved"}, headers=REC).status_code == 200
+    c.patch(f"/api/outreach/{did}", json={"body": "edited"}, headers=REC)
+    assert c.get(f"/api/people/{pid}", headers=REC).json()["outreach_reviewed"] is False
+    c.patch(f"/api/evidence/{eid}", json={"strength": "Weak"}, headers=RES)
+    p = c.get(f"/api/people/{pid}", headers=REC).json()
+    assert p["research_status"] == "recruiter_verified"
+    assert c.patch(f"/api/outreach/{did}", json={"status": "Approved"}, headers=REC).status_code == 400
+
+
+def test_unsourced_evidence_not_scored():
+    pid = c.post("/api/people", json={"full_name": "Uncited Person"}, headers=REC).json()["id"]
+    c.post(f"/api/people/{pid}/evidence", json={"dimension": "built_from_zero", "claim": "Says so", "strength": "Strong"}, headers=RES)
+    assert c.get(f"/api/people/{pid}", headers=REC).json()["score"] == 0
+
+
+def test_cjk_names_not_duplicates_and_delete_cleans_up():
+    a = c.post("/api/people", json={"full_name": "山田太郎", "country": "Japan", "city": "Osaka"}, headers=REC).json()
+    b = c.post("/api/people", json={"full_name": "佐藤花子", "country": "Japan", "city": "Osaka"}, headers=REC).json()
+    assert not b["possible_duplicates"]
+    c.post(f"/api/people/{a['id']}/notes", json={"body": "note"}, headers=REC)
+    assert c.delete(f"/api/people/{a['id']}", headers=REC).status_code == 200
+
+
+def test_export_filtered_and_formula_safe():
+    c.post("/api/people", json={"full_name": "=HYPERLINK(\"x\")", "country": "Thailand"}, headers=REC)
+    r = c.get("/api/export/people.csv", params={"scope": "filtered", "country": ["Thailand"]}, headers=REC).text
+    rows = r.strip().splitlines()[1:]
+    assert rows and all("Thailand" in x for x in rows) and "'=HYPERLINK" in r
+
+
+def test_spa_and_watch_event_and_ssrf():
+    assert "root:" not in c.get("//etc/passwd").text
+    ok = c.post("/api/watch-events", json={"company_name": "X", "event_type": "Restructuring", "event_date": "2026-01-01", "summary": "s",
+                                            "source_url": "https://example.com/news"}, headers=RES)
+    assert ok.status_code == 200
+    assert c.post("/api/evidence/from-url", json={"url": "http://127.0.0.1:8000/api/meta"}, headers=RES).status_code == 400

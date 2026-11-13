@@ -7,8 +7,9 @@ from .models import Person
 
 
 def norm_name(n: str) -> str:
-    n = unicodedata.normalize("NFKD", n).encode("ascii", "ignore").decode().lower()
-    return " ".join(t for t in re.sub(r"[^a-z ]", " ", n).split() if len(t) > 1)
+    n = "".join(ch for ch in unicodedata.normalize("NFKD", n or "") if not unicodedata.combining(ch)).casefold()
+    toks = re.sub(r"[\W\d_]+", " ", n).split()
+    return " ".join(t for t in toks if len(t) > 1 or not t.isascii())
 
 
 def norm_url(u: str | None) -> str | None:
@@ -23,6 +24,8 @@ def similar(a: Person, b: Person) -> str | None:
     if norm_url(a.profile_url) and norm_url(a.profile_url) == norm_url(b.profile_url):
         return "Same profile URL"
     na, nb = norm_name(a.full_name), norm_name(b.full_name)
+    if not na or not nb:
+        return None
     ratio = SequenceMatcher(None, na, nb).ratio()
     ta, tb = set(na.split()), set(nb.split())
     subset = len(ta & tb) >= 2 and (ta <= tb or tb <= ta)

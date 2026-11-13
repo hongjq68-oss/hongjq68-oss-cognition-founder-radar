@@ -1,5 +1,7 @@
 import csv
+import hmac
 import io
+import os
 from collections import Counter
 from datetime import date, datetime
 from pathlib import Path
@@ -20,7 +22,7 @@ from .scoring import DISCLAIMER, ai_relevance, capability_status, role_fit, scor
 from .seed import seed
 from .serializers import evidence as ev_json, iso, person_detail, person_summary
 from .sources import BY_KEY, SOURCES, github, url_evidence
-from .taxonomy import (AVAILABILITY, AVAILABILITY_REQUIRES_EVIDENCE, BUILDER_TYPES, CAPABILITIES, CATEGORIES, CHECKLIST, DIMENSIONS,
+from .taxonomy import (WATCH_EVENT_TYPES, AVAILABILITY, AVAILABILITY_REQUIRES_EVIDENCE, BUILDER_TYPES, CAPABILITIES, CATEGORIES, CHECKLIST, DIMENSIONS,
                        EVIDENCE_DIMENSIONS, PRIORITY_COUNTRIES, RESEARCH_STATUSES, SECTORS, VENTURE_STATUSES)
 
 app = FastAPI(title="Cognition Founder Radar")
@@ -52,10 +54,18 @@ def get_person(db: Session, pid: int) -> Person:
 # ---------- auth & meta ----------
 class LoginIn(BaseModel):
     email: str
+    access_code: str | None = None
+
+
+def access_code() -> str | None:
+    return os.environ.get("RADAR_ACCESS_CODE") or None
 
 
 @app.post("/api/auth/login")
 def login(body: LoginIn, db: Session = Depends(get_db)):
+    code = access_code()
+    if code and not hmac.compare_digest((body.access_code or "").encode(), code.encode()):
+        raise HTTPException(401, "Invalid access code")
     u = db.query(User).filter_by(email=body.email.strip().lower()).first()
     if not u or not u.active:
         raise HTTPException(401, "Unknown user")
@@ -66,6 +76,8 @@ def login(body: LoginIn, db: Session = Depends(get_db)):
 
 @app.get("/api/auth/demo-users")
 def demo_users(db: Session = Depends(get_db)):
+    if access_code():
+        return []
     return [{"name": u.name, "email": u.email, "role": u.role} for u in db.query(User).filter_by(active=True)]
 
 
@@ -78,7 +90,7 @@ def me(u: User = Depends(current_user)):
 @app.get("/api/meta")
 def meta(db: Session = Depends(get_db), u: User = Read):
     return {"countries": PRIORITY_COUNTRIES, "categories": CATEGORIES, "builder_types": BUILDER_TYPES, "venture_statuses": VENTURE_STATUSES,
-            "availability": AVAILABILITY, "research_statuses": RESEARCH_STATUSES, "checklist": CHECKLIST, "capabilities": CAPABILITIES,
+            "availability": AVAILABILITY, "research_statuses": RESEARCH_STATUSES, "checklist": CHECKLIST, "capabilities": CAPABILITIES, "watch_event_types": WATCH_EVENT_TYPES,
             "dimensions": {k: {"label": v[0], "weight": v[1]} for k, v in DIMENSIONS.items()}, "evidence_dimensions": EVIDENCE_DIMENSIONS,
             "sectors": SECTORS, "roles": [{"id": r.id, "name": r.name} for r in roles_all(db)],
             "users": [{"id": x.id, "name": x.name, "role": x.role} for x in db.query(User).filter_by(active=True)],
@@ -284,14 +296,38 @@ def patch_person(pid: int, body: dict, db: Session = Depends(get_db), u: User = 
     return {"ok": True}
 
 
+PERSON_CHILDREN = (PersonCompany, Evidence, Note, Conversation, RoleMatch, OutreachDraft, ResearchTask)
+
+
 @app.delete("/api/people/{pid}")
 def delete_person(pid: int, db: Session = Depends(get_db), u: User = Recruiter):
     p = get_person(db, pid)
     log(db, u, "person.delete", "person", pid, name=p.full_name)
-    db.query(PersonCompany).filter_by(person_id=pid).delete()
+    for model in PERSON_CHILDREN:
+        db.query(model).filter_by(person_id=pid).delete(synchronize_session=False)
+    db.expire(p)
     db.delete(p)
     db.commit()
     return {"ok": True}
+
+
+def ready_problems(p: Person) -> list[str]:
+    out = [CHECKLIST[k] for k in CHECKLIST if not (p.checklist or {}).get(k, {}).get("ok")]
+    if not any(e.verification == "Verified" and e.source_url for e in p.evidence):
+        out.append("at least one recruiter-verified evidence item")
+    return out
+
+
+def recheck_ready(db: Session, u: User, p: Person) -> None:
+    """Drop a candidate out of 'ready' (and un-approve drafts) when the evidence behind it no longer qualifies."""
+    db.flush()
+    db.refresh(p)
+    if p.research_status != "ready_for_outreach_review" or not ready_problems(p):
+        return
+    p.research_status = "recruiter_verified"
+    p.outreach_reviewed = False
+    db.query(OutreachDraft).filter_by(person_id=p.id, status="Approved").update({"status": "Draft"})
+    log(db, u, "person.status", "person", p.id, **{"from": "ready_for_outreach_review", "to": "recruiter_verified", "reason": "verified evidence changed"})
 
 
 class StatusIn(BaseModel):
@@ -392,14 +428,13 @@ def patch_evidence(eid: int, body: dict, db: Session = Depends(get_db), u: User 
             if v == "Verified" and not e.source_url:
                 raise HTTPException(400, "Evidence needs a source link before it can be verified")
             e.verification, e.verified_by = v, u.name if v != "Unverified" else None
-        elif k in ("claim", "strength", "source_url", "source_name", "capabilities", "dimension"):
-            setattr(e, k, v)
-            if k in ("claim", "source_url") and e.verification == "Verified":
+        elif k in ("claim", "strength", "source_url", "source_name", "capabilities", "dimension", "published_date"):
+            setattr(e, k, (date.fromisoformat(v) if v else None) if k == "published_date" else v)
+            if e.verification == "Verified" and "verification" not in body:
                 e.verification, e.verified_by = "Unverified", None
-        elif k == "published_date":
-            e.published_date = date.fromisoformat(v) if v else None
         else:
             raise HTTPException(400, f"Field {k} cannot be edited")
+    recheck_ready(db, u, get_person(db, e.person_id))
     log(db, u, "evidence.update", "person", e.person_id, evidence_id=eid, **{k: str(v)[:80] for k, v in body.items()})
     db.commit()
     return ev_json(e)
@@ -411,7 +446,9 @@ def delete_evidence(eid: int, db: Session = Depends(get_db), u: User = Researche
     if not e:
         raise HTTPException(404)
     log(db, u, "evidence.delete", "person", e.person_id, evidence_id=eid, claim=e.claim[:120])
+    pid = e.person_id
     db.delete(e)
+    recheck_ready(db, u, get_person(db, pid))
     db.commit()
     return {"ok": True}
 
@@ -516,11 +553,12 @@ def patch_outreach(did: int, body: dict, db: Session = Depends(get_db), u: User 
     if "status" in body:
         if body["status"] not in ("Draft", "Approved", "Rejected"):
             raise HTTPException(400)
-        if body["status"] == "Approved" and p.research_status != "ready_for_outreach_review":
+        if body["status"] == "Approved" and (p.research_status != "ready_for_outreach_review" or ready_problems(p)):
             raise HTTPException(400, "Candidate must be 'Ready for outreach review' (human checklist complete) before approving outreach.")
         d.status = body["status"]
         d.reviewed_by, d.reviewed_at = u.name, datetime.utcnow()
-        p.outreach_reviewed = any(x.status == "Approved" for x in db.query(OutreachDraft).filter_by(person_id=p.id))
+    db.flush()
+    p.outreach_reviewed = any(x.status == "Approved" for x in db.query(OutreachDraft).filter_by(person_id=p.id))
     log(db, u, "outreach.update", "person", d.person_id, draft_id=did, status=d.status)
     db.commit()
     return {"ok": True}
@@ -762,7 +800,7 @@ class WatchEventIn(BaseModel):
 def add_event(body: WatchEventIn, db: Session = Depends(get_db), u: User = Researcher):
     if not body.source_url.startswith(("http://", "https://")):
         raise HTTPException(400, "An official announcement URL is required.")
-    if body.event_type not in ("Startup launch", "Acquisition", "Closure", "Founder transition", "Restructuring"):
+    if body.event_type not in WATCH_EVENT_TYPES:
         raise HTTPException(400, "Unknown event type")
     e = WatchEvent(**body.model_dump(), created_by=u.name)
     db.add(e)
@@ -931,11 +969,27 @@ async def import_csv(file: UploadFile = File(...), db: Session = Depends(get_db)
             "note": "Imported availability stays 'Unknown' until a recruiter reviews the cited availability evidence."}
 
 
+class SafeWriter:
+    """csv.writer that neutralises spreadsheet formulas in text cells."""
+    def __init__(self, buf):
+        self.w = csv.writer(buf)
+
+    def writerow(self, row):
+        self.w.writerow(["'" + v if isinstance(v, str) and v[:1] in ("=", "+", "-", "@", "\t", "\r") else v for v in row])
+
+
 @app.get("/api/export/people.csv")
-def export_csv(scope: str = "approved", ids: str | None = None, db: Session = Depends(get_db), u: User = Recruiter):
+def export_csv(scope: str = "approved", ids: str | None = None, q: str | None = None, country: list[str] = Query(None),
+               category: list[str] = Query(None), founded_from: int | None = None, founded_to: int | None = None, ai: list[str] = Query(None),
+               capability: list[str] = Query(None), venture_status: list[str] = Query(None), role_id: int | None = None, min_fit: int = 0,
+               availability: list[str] = Query(None), status: list[str] = Query(None), saved: bool | None = None, owner_id: int | None = None,
+               min_score: int = 0, db: Session = Depends(get_db), u: User = Recruiter):
     roles = roles_all(db)
     ps = people_q(db).all()
-    if ids:
+    if scope == "filtered":
+        ps = filter_people(ps, roles, q, country, category, founded_from, founded_to, ai, capability, venture_status, role_id,
+                           min_fit, availability, status, saved, owner_id, min_score)
+    elif ids:
         wanted = {int(x) for x in ids.split(",") if x.strip().isdigit()}
         ps = [p for p in ps if p.id in wanted]
     elif scope == "approved":
@@ -943,7 +997,7 @@ def export_csv(scope: str = "approved", ids: str | None = None, db: Session = De
     elif scope == "verified":
         ps = [p for p in ps if p.research_status != "research_identified"]
     buf = io.StringIO()
-    w = csv.writer(buf)
+    w = SafeWriter(buf)
     w.writerow(["id", "full_name", "title", "company", "country", "city", "category", "builder_type", "what_they_built", "ai_evidence",
                 "research_relevance_indicator", "confidence", "top_role_match", "availability", "availability_note", "research_status",
                 "outreach_reviewed", "owner", "last_verified", "profile_url", "sources", "is_synthetic"])
@@ -984,7 +1038,14 @@ def merge(body: MergeIn, db: Session = Depends(get_db), u: User = Recruiter):
             setattr(a, col, getattr(b, col))
     for model in (Evidence, Note, Conversation, RoleMatch, OutreachDraft, ResearchTask):
         db.query(model).filter_by(person_id=b.id).update({"person_id": a.id})
-    db.query(PersonCompany).filter_by(person_id=b.id).delete()
+    held = {pc.company_id for pc in db.query(PersonCompany).filter_by(person_id=a.id)}
+    for pc in db.query(PersonCompany).filter_by(person_id=b.id).all():
+        if pc.company_id in held:
+            db.delete(pc)
+        else:
+            pc.person_id = a.id
+            held.add(pc.company_id)
+    db.flush()
     db.expire(b)
     log(db, u, "person.merge", "person", a.id, merged_id=b.id, merged_name=b.full_name)
     db.delete(db.get(Person, b.id))
@@ -1006,5 +1067,5 @@ if DIST.exists():
 
     @app.get("/{path:path}", include_in_schema=False)
     def spa(path: str):
-        f = DIST / path
-        return FileResponse(f if path and f.is_file() else DIST / "index.html")
+        f = (DIST / path).resolve()
+        return FileResponse(f if path and f.is_relative_to(DIST.resolve()) and f.is_file() else DIST / "index.html")

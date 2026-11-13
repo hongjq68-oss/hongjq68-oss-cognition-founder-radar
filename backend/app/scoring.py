@@ -6,8 +6,12 @@ DISCLAIMER = ("Research relevance indicator based only on cited public evidence.
               "It is not a hiring decision, suitability judgement or prediction of performance.")
 
 
+def cited(e: Evidence) -> bool:
+    return e.verification != "Disputed" and bool(e.source_url)
+
+
 def evidence_points(e: Evidence) -> int:
-    if e.verification == "Disputed":
+    if not cited(e):
         return 0
     return STRENGTH_POINTS.get(e.strength, 35) + (VERIFIED_BONUS if e.verification == "Verified" else 0)
 
@@ -15,7 +19,7 @@ def evidence_points(e: Evidence) -> int:
 def capability_status(person: Person) -> dict[str, dict]:
     out = {}
     for cap, label in CAPABILITIES.items():
-        rows = [e for e in person.evidence if cap in (e.capabilities or []) and e.verification != "Disputed"]
+        rows = [e for e in person.evidence if cap in (e.capabilities or []) and cited(e)]
         verified = [e for e in rows if e.verification == "Verified"]
         status = "Evidenced (verified)" if verified else "Evidenced (unverified)" if rows else "Unknown"
         out[cap] = {"label": label, "status": status, "evidence_ids": [e.id for e in rows]}
@@ -46,13 +50,13 @@ def score(person: Person, roles: list[RoleProfile]) -> dict:
     for key, (label, weight) in DIMENSIONS.items():
         if key == "role_relevance":
             best = max(((role_fit(person, r)[0], r) for r in roles), key=lambda x: x[0], default=(0, None))
-            role_ev = [e for e in person.evidence if e.dimension == "role_relevance" and e.verification != "Disputed"]
+            role_ev = [e for e in person.evidence if e.dimension == "role_relevance" and cited(e)]
             pts = max([best[0]] + [evidence_points(e) for e in role_ev])
             cap_ids = sorted({i for c in (best[1].capabilities if best[1] else {}) for i in capability_status(person)[c]["evidence_ids"]}) if best[1] else []
             ev_ids = [e.id for e in role_ev] + cap_ids
             basis = f"Best capability fit: {best[1].name} ({best[0]}%)" if best[1] and best[0] else "No evidenced capabilities match a Cognition role yet"
         else:
-            rows = [e for e in person.evidence if e.dimension == key and e.verification != "Disputed"]
+            rows = [e for e in person.evidence if e.dimension == key and cited(e)]
             pts = min(100, max([evidence_points(e) for e in rows], default=0) + 5 * max(0, len(rows) - 1)) if rows else 0
             ev_ids = [e.id for e in rows]
             basis = f"{len(rows)} evidence item(s), {sum(e.verification == 'Verified' for e in rows)} verified" if rows else "No evidence — needs validation"
@@ -60,17 +64,17 @@ def score(person: Person, roles: list[RoleProfile]) -> dict:
         total += pts * weight
         dims.append({"key": key, "label": label, "weight": weight, "score": pts, "evidence_ids": ev_ids, "basis": basis,
                      "missing": pts == 0})
-    ev = [e for e in person.evidence if e.verification != "Disputed"]
+    live = [e for e in person.evidence if e.verification != "Disputed"]
+    ev = [e for e in live if cited(e)]
     verified = sum(e.verification == "Verified" for e in ev)
-    sourced = sum(bool(e.source_url) for e in ev)
-    confidence = ("High" if verified >= 3 and sourced == len(ev) else
-                  "Medium" if ev and sourced >= max(1, len(ev) // 2) else "Low")
+    confidence = ("High" if verified >= 3 and len(ev) == len(live) else
+                  "Medium" if ev and len(ev) >= max(1, len(live) // 2) else "Low")
     return {"total": round(total), "dimensions": dims, "confidence": confidence, "disclaimer": DISCLAIMER,
             "missing": [d["label"] for d in dims if d["missing"]], "evidence_count": len(ev), "verified_count": verified}
 
 
 def ai_relevance(person: Person) -> str:
-    rows = [e for e in person.evidence if e.verification != "Disputed" and ("ai_ml" in (e.capabilities or []) or e.dimension == "ai_technical")]
+    rows = [e for e in person.evidence if cited(e) and ("ai_ml" in (e.capabilities or []) or e.dimension == "ai_technical")]
     if not rows:
         return "Unknown"
     best = max(evidence_points(e) for e in rows)

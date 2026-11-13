@@ -10,7 +10,7 @@ export default function Watchlist() {
   const [d, setD] = useState<Any>(null);
   const [open, setOpen] = useState(false);
   const [wc, setWc] = useState("");
-  const [ev, setEv] = useState({ company_name: "", event_type: "Restructuring announcement", event_date: "", summary: "", affected_areas: "", capability_clusters: "", opt_in_channels: "", source_url: "" });
+  const [ev, setEv] = useState({ company_name: "", event_type: "Restructuring", event_date: "", summary: "", affected_areas: "", capability_clusters: "", opt_in_channels: "", source_url: "" });
   const load = () => api.watchlist().then(setD);
   useEffect(() => { load(); }, []);
   const go = async (fn: () => Promise<unknown>, ok: string) => { try { await fn(); toast(ok, "ok"); load(); } catch (e) { toast((e as Error).message); } };
@@ -29,7 +29,7 @@ export default function Watchlist() {
             {open && (
               <div className="grid sm:grid-cols-2 gap-2 mb-4 text-sm">
                 <input className="input" placeholder="Company / segment" value={ev.company_name} onChange={(e) => setEv({ ...ev, company_name: e.target.value })} />
-                <select className="input" value={ev.event_type} onChange={(e) => setEv({ ...ev, event_type: e.target.value })}>{["Restructuring announcement", "Office closure", "Business unit change", "Acquisition", "Startup closure", "Startup launch", "Accelerator batch"].map((x) => <option key={x}>{x}</option>)}</select>
+                <select className="input" value={ev.event_type} onChange={(e) => setEv({ ...ev, event_type: e.target.value })}>{(meta.watch_event_types as string[]).map((x) => <option key={x}>{x}</option>)}</select>
                 <input className="input sm:col-span-2" placeholder="Official source URL (required)" value={ev.source_url} onChange={(e) => setEv({ ...ev, source_url: e.target.value })} />
                 <input className="input" type="date" value={ev.event_date} onChange={(e) => setEv({ ...ev, event_date: e.target.value })} />
                 <input className="input" placeholder="Affected functions/regions (as stated)" value={ev.affected_areas} onChange={(e) => setEv({ ...ev, affected_areas: e.target.value })} />

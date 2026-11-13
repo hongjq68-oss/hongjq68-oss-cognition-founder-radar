@@ -98,3 +98,5 @@ DEFAULT_ROLES = [
 ]
 
 DEFAULT_WATCHLIST = ["Canva", "Netflix", "Grab", "Sea", "Google", "Microsoft", "Amazon"]
+
+WATCH_EVENT_TYPES = ["Restructuring", "Acquisition", "Closure", "Founder transition", "Startup launch", "Accelerator batch"]
