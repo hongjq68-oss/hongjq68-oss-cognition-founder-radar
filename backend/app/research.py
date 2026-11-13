@@ -115,7 +115,7 @@ def rules_match(p: Person, role: RoleProfile) -> dict:
     built = next((e.claim for e in p.evidence if e.dimension == "built_from_zero" and e.verification != "Disputed"), None)
     why = (f"{role.name} needs {', '.join(CAPABILITIES[c].lower() for c in role.capabilities)}. "
            f"Evidence supports {len(supported)} of {len(role.capabilities)}" + (f" — notably: {built}" if built else ".") )
-    qs = [QUESTIONS[c].format(product=_product(p)) for c in gaps[:3]] + [QUESTIONS[c].format(product=_product(p)) for c in supported[:2]]
+    qs = list(dict.fromkeys([QUESTIONS[c].format(product=_product(p)) for c in gaps[:3]] + [QUESTIONS[c].format(product=_product(p)) for c in supported[:2]]))
     angle = (role.angle or "") + " " + CATEGORY_ANGLE.get(p.category, "").format(company=p.company.name if p.company else "their venture", product=_product(p))
     return {"relevance": fit, "why": why, "supported": sup, "needs_validation": need, "questions": qs, "angle": angle.strip(),
             "note": "Decision support only — the recruiter decides whether to engage."}

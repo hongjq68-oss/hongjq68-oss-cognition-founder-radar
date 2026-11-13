@@ -266,11 +266,11 @@ function RolesTab({ p, meta, can, run, busy }: Ctx) {
               </div>
               <div>
                 <div className="label">Gaps / needs validation</div>
-                <List items={c.gaps} />
+                <List items={(c.needs_validation ?? []).map((g: Any) => `${g.label}: ${g.reason}`)} />
                 <div className="label mt-4">Questions to validate in conversation</div>
                 <List items={c.questions} />
                 <div className="label mt-4">Conversation angles</div>
-                <List items={c.angles} />
+                <List items={c.angle ? [c.angle] : []} />
               </div>
             </div>
           </Card>
