@@ -2,7 +2,7 @@ import { Copy } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, type Any } from "../api";
-import { Badge, Card, Empty, PageHeader } from "../components/ui";
+import { Badge, Card, Empty, PageHeader, Synthetic } from "../components/ui";
 import { useApp } from "../ctx";
 
 export default function Duplicates() {
@@ -24,7 +24,7 @@ export default function Duplicates() {
             <div className="grid md:grid-cols-2 gap-4">
               {[[d.a, d.b], [d.b, d.a]].map(([x, y]) => (
                 <div key={x.id} className="rounded-lg border border-slate-200 p-3 text-sm">
-                  <Link to={`/people/${x.id}`} className="font-medium hover:text-brand-700">{x.full_name}</Link>
+                  <Link to={`/people/${x.id}`} className="font-medium hover:text-brand-700">{x.full_name}</Link> <Synthetic show={x.is_synthetic} />
                   <div className="text-xs text-slate-500">{x.title} · {x.company?.name ?? "No company"} · {x.city}, {x.country}</div>
                   <div className="text-xs text-slate-500">{x.evidence_count} evidence · source {x.source} · score {x.score}</div>
                   {can("verify") && <button className="btn-secondary !py-1 text-xs mt-2" onClick={() => merge(x, y)}>Keep this, merge other into it</button>}

@@ -650,23 +650,25 @@ def shortlist_people(db: Session, c: ShortlistCriteria) -> list[dict]:
                        ai=c.ai or None, role_id=c.role_id, min_fit=c.min_fit if c.role_id else 0, min_score=c.min_score)
     ps = [p for p in ps if score(p, roles)["evidence_count"] >= c.min_evidence and not (c.exclude_unavailable and p.availability == "Not currently available")]
     role = next((r for r in roles if r.id == c.role_id), None)
-    out = []
-    for p in ps:
-        s = person_summary(p, roles)
-        reasons = []
-        if role:
-            fit, sup, _ = role_fit(p, role)
-            s["selected_role_fit"] = fit
-            reasons.append(f"{fit}% evidenced capability fit for {role.name} ({', '.join(CAPABILITIES[x] for x in sup)})")
-        reasons.append(f"{s['category_label']} with {s['evidence_count']} cited evidence items ({s['verified_count']} verified)")
-        if s["ai_relevance"] in ("High", "Medium"):
-            reasons.append(f"{s['ai_relevance']} AI relevance: {s['ai_evidence']}")
-        if s["missing"]:
-            reasons.append("Needs validation: " + ", ".join(s["missing"]))
-        s["shortlist_reasons"] = reasons
-        out.append(s)
+    out = [shortlist_entry(p, roles, role) for p in ps]
     out.sort(key=lambda x: (-(x.get("selected_role_fit") or 0) * 0.5 - x["score"]))
     return out[: max(1, min(c.limit, 30))]
+
+
+def shortlist_entry(p: Person, roles: list[RoleProfile], role: RoleProfile | None) -> dict:
+    s = person_summary(p, roles)
+    reasons = []
+    if role:
+        fit, sup, _ = role_fit(p, role)
+        s["selected_role_fit"] = fit
+        reasons.append(f"{fit}% evidenced capability fit for {role.name} ({', '.join(CAPABILITIES[x] for x in sup)})")
+    reasons.append(f"{s['category_label']} with {s['evidence_count']} cited evidence items ({s['verified_count']} verified)")
+    if s["ai_relevance"] in ("High", "Medium"):
+        reasons.append(f"{s['ai_relevance']} AI relevance: {s['ai_evidence']}")
+    if s["missing"]:
+        reasons.append("Needs validation: " + ", ".join(s["missing"]))
+    s["shortlist_reasons"] = reasons
+    return s
 
 
 @app.post("/api/shortlists/generate")
@@ -705,8 +707,9 @@ def shortlist(sid: int, db: Session = Depends(get_db), u: User = Read):
         raise HTTPException(404)
     roles = roles_all(db)
     ppl = {p.id: p for p in people_q(db).filter(Person.id.in_(s.person_ids))}
+    role = next((r for r in roles if r.id == (s.criteria or {}).get("role_id")), None)
     return {"id": s.id, "name": s.name, "criteria": s.criteria, "created_by": s.created_by, "created_at": iso(s.created_at),
-            "people": [person_summary(ppl[i], roles) for i in s.person_ids if i in ppl]}
+            "people": [shortlist_entry(ppl[i], roles, role) for i in s.person_ids if i in ppl]}
 
 
 # ---------- watchlist ----------
